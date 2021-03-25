@@ -62,6 +62,8 @@ def test_tensor_passing_layer_gradients():
     abs_distances = torch.norm(rel_vectors, 2, -1, keepdim=True)
     rel_vectors = rel_vectors / abs_distances
 
+    rel_vectors.requires_grad = True
+
     origin_nodes, _ = edge_index  # origin, neighbor
     num_nodes = pos.size(0)
     node_degrees = degree(origin_nodes, num_nodes=num_nodes, dtype=torch.get_default_dtype())

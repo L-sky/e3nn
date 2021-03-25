@@ -48,6 +48,23 @@ void backward_R_cuda(
         torch::Tensor G_base_offsets,
         torch::Tensor F_base_offsets);
 
+void backward_Y_cuda(
+        torch::Tensor output,
+		torch::Tensor W,
+		torch::Tensor C,
+		torch::Tensor G,
+		torch::Tensor F,
+		torch::Tensor Y,
+		torch::Tensor R,
+		torch::Tensor L_out_list,
+		torch::Tensor L_in_list,
+		torch::Tensor u_sizes,
+		torch::Tensor v_sizes,
+		torch::Tensor C_offsets,
+		torch::Tensor G_base_offsets,
+		torch::Tensor F_base_offsets,
+		torch::Tensor R_base_offsets);
+
 // C++ interface
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
@@ -183,8 +200,35 @@ torch::Tensor backward_R(
 }
 
 
+torch::Tensor backward_Y(
+		torch::Tensor W,
+		torch::Tensor C,
+		torch::Tensor G,
+		torch::Tensor F,
+		torch::Tensor Y,
+		torch::Tensor R,
+		torch::Tensor L_out_list,
+		torch::Tensor L_in_list,
+		torch::Tensor u_sizes,
+		torch::Tensor v_sizes,
+		torch::Tensor C_offsets,
+		torch::Tensor G_base_offsets,
+		torch::Tensor F_base_offsets,
+		torch::Tensor R_base_offsets
+){
+    // TODO: add checks
+    torch::Tensor output = torch::zeros_like(Y);
+
+    backward_Y_cuda(output, W, C, G, F, Y, R,
+                    L_out_list, L_in_list, u_sizes, v_sizes,
+                    C_offsets, G_base_offsets, F_base_offsets, R_base_offsets);
+    return output;
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &forward, "Tensor message function: forward pass (CUDA)");
   m.def("backward_F", &backward_F, "Tensor message function: backward pass for features (CUDA)");
   m.def("backward_R", &backward_R, "Tensor message function: backward pass for Radial Basis Function outputs (CUDA)");
+  m.def("backward_Y", &backward_Y, "Tensor message function: backward pass for Real Spherical Harmonics (CUDA)");
 }

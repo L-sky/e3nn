@@ -8,6 +8,7 @@
 __device__ constexpr uint32_t threads_per_block_forward_parent_cuda_kernel()    { return 256; }
 __device__ constexpr uint32_t threads_per_block_backward_R_parent_cuda_kernel() { return 256; }
 __device__ constexpr uint32_t threads_per_block_backward_F_parent_cuda_kernel() { return 256; }
+__device__ constexpr uint32_t threads_per_block_backward_Y_cuda_kernel()        { return 256; }
 
 
 // Declarations of child kernels
@@ -396,6 +397,88 @@ __global__ void backward_R_child_cuda_kernel(
 }
 
 
+template<typename T>
+__global__ void backward_Y_cuda_kernel(
+              T*        const __restrict__ output,
+        const T*        const __restrict__ W,
+        const T*        const __restrict__ C,
+        const T*        const __restrict__ G,
+        const T*        const __restrict__ F,
+        const T*        const __restrict__ R,
+        const uint32_t* const __restrict__ L_out_list,
+        const uint32_t* const __restrict__ L_in_list,
+        const uint32_t* const __restrict__ u_sizes,
+        const uint32_t* const __restrict__ v_sizes,
+        const uint32_t* const __restrict__ C_offsets,
+        const uint32_t* const __restrict__ G_base_offsets,
+        const uint32_t* const __restrict__ F_base_offsets,
+        const uint32_t* const __restrict__ R_base_offsets,
+        const uint32_t					   ab_size,
+        const uint32_t 					   l_in_max_net_bound,
+        const uint32_t                     l_out_list_size,
+        const uint32_t                     l_in_list_size
+){
+	const uint32_t lm = blockIdx.y;
+    const uint32_t ab = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if (ab >= ab_size) return;
+
+	const uint32_t l = __float2uint_rd(__fsqrt_rn(__uint2float_rn(blockIdx.y) + 0.5f));
+	const uint32_t m = lm - l*l;
+	const uint32_t m_size = 2*l + 1;
+
+    T local_output = 0;
+
+    // sum_(l_out_u_i)
+    for(uint32_t l_out_id=0, l_out_u_i=0; l_out_id < l_out_list_size; l_out_id++){
+        uint32_t l_out = L_out_list[l_out_id];
+        uint32_t u_size = u_sizes[l_out_id];
+        uint32_t i_size = 2*l_out + 1;
+        for(uint32_t u=0; u < u_size; u++){
+            for(uint32_t i=0; i < i_size; i++, l_out_u_i++){
+                // sum_(l_in_v_j)
+                for(uint32_t l_in_id=0, l_in_v_j=0; l_in_id < l_in_list_size; l_in_id++){
+                    uint32_t l_in = L_in_list[l_in_id];
+                    uint32_t v_size = v_sizes[l_in_id];
+                    uint32_t j_size = 2*l_in + 1;
+
+                    uint32_t l_min = abs((int32_t)l_out - (int32_t)l_in);
+                    uint32_t l_max = l_out + l_in;
+                    //printf("%u, %u, %u, %u\n", l_out, l_in, l_min, l_max);
+                    if(l < l_min || l_max < l) continue; // skip combinations that contribute 0
+
+                    for(uint32_t v=0; v < v_size; v++){
+                        for(uint32_t j=0; j < j_size; j++, l_in_v_j++){
+                            /*printf("lm: %u, ab: %u, C: %f, G: %f, R: %f, R_id: %u, R_base: %u, R_lp: %u, R_u: %u, R_v: %u, ab_size: %u, G_id: %u\n", lm, ab,
+                                                            C[C_offsets[l_out * l_in_max_net_bound + l_in] + i_size * j_size * (l*l - l_min*l_min) + i * j_size * m_size + j * m_size + m],
+                                                            G[(G_base_offsets[l_out_id] + u * i_size + i) * ab_size + ab],
+                                                            R[(R_base_offsets[l_out_id*l_in_list_size + l_in_id] + (l - l_min) * u_size * v_size + u * v_size + v) * ab_size + ab],
+                                                            (R_base_offsets[l_out_id*l_in_list_size + l_in_id] + (l - l_min) * u_size * v_size + u * v_size + v) * ab_size + ab,
+                                                            R_base_offsets[l_out_id*l_in_list_size + l_in_id],
+                                                            (l - l_min) * u_size * v_size,
+                                                            u * v_size,
+                                                            v,
+                                                            ab_size,
+                                                            (G_base_offsets[l_out_id] + u * i_size + i) * ab_size + ab);*/
+
+                            local_output +=
+                                W[l_out_id * l_in_list_size + l_in_id] *
+                                C[C_offsets[l_out * l_in_max_net_bound + l_in] + i_size * j_size * (l*l - l_min*l_min) + i * j_size * m_size + j * m_size + m] *
+	                            G[(G_base_offsets[l_out_id] + u * i_size + i) * ab_size + ab] * // l_out_u_i = G_base_offsets[l_out_id] + u * i_size + i
+	                            F[(F_base_offsets[l_in_id] + v * j_size + j) * ab_size + ab] *  // l_in_v_j = F_base_offsets[l_in_id] + v * j_size + j
+	                            R[(R_base_offsets[l_out_id*l_in_list_size + l_in_id] + (l - l_min) * u_size * v_size + u * v_size + v) * ab_size + ab];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // write output to the global memory
+    // printf("lm: %u; l: %u; m: %u, ab: %u, value: %f\n", lm, l, m, ab, local_output);
+    output[lm * ab_size + ab] = local_output;
+}
+
 
 void forward_cuda(
         torch::Tensor output,
@@ -572,3 +655,71 @@ void backward_R_cuda(
                                                             ab_size, l_in_max_net_bound);
     }
 }
+
+
+void backward_Y_cuda(
+        torch::Tensor output,
+		torch::Tensor W,
+		torch::Tensor C,
+		torch::Tensor G,
+		torch::Tensor F,
+		torch::Tensor Y,
+		torch::Tensor R,
+		torch::Tensor L_out_list,
+		torch::Tensor L_in_list,
+		torch::Tensor u_sizes,
+		torch::Tensor v_sizes,
+		torch::Tensor C_offsets,
+		torch::Tensor G_base_offsets,
+		torch::Tensor F_base_offsets,
+		torch::Tensor R_base_offsets
+) {
+    const uint32_t lm_size            = (uint32_t) Y.size(0);
+    const uint32_t ab_size            = (uint32_t) Y.size(1);
+
+    const uint32_t l_in_max_net_bound = (uint32_t) C_offsets.size(1);
+
+    const uint32_t l_out_list_size    = (uint32_t) L_out_list.size(0);
+    const uint32_t l_in_list_size     = (uint32_t) L_in_list.size(0);
+
+    const uint32_t* const __restrict__ L_out_list_ptr          = (uint32_t*) L_out_list.data_ptr();
+    const uint32_t* const __restrict__ L_in_list_ptr           = (uint32_t*) L_in_list.data_ptr();
+    const uint32_t* const __restrict__ u_sizes_ptr             = (uint32_t*) u_sizes.data_ptr();
+    const uint32_t* const __restrict__ v_sizes_ptr             = (uint32_t*) v_sizes.data_ptr();
+    const uint32_t* const __restrict__ C_offsets_ptr           = (uint32_t*) C_offsets.data_ptr();
+    const uint32_t* const __restrict__ G_base_offsets_ptr      = (uint32_t*) G_base_offsets.data_ptr();
+    const uint32_t* const __restrict__ F_base_offsets_ptr      = (uint32_t*) F_base_offsets.data_ptr();
+    const uint32_t* const __restrict__ R_base_offsets_ptr      = (uint32_t*) R_base_offsets.data_ptr();
+
+    const uint32_t threads_per_block = threads_per_block_backward_Y_cuda_kernel();
+    const uint32_t ab_blocks_num = (ab_size + threads_per_block - 1) / threads_per_block;
+    dim3 blocks(ab_blocks_num, lm_size);
+
+    if (output.dtype() == torch::kFloat64){
+              double* const __restrict__ output_ptr = (double*) output.data_ptr();
+        const double* const __restrict__ W_ptr      = (double*) W.data_ptr();
+        const double* const __restrict__ C_ptr      = (double*) C.data_ptr();
+        const double* const __restrict__ G_ptr      = (double*) G.data_ptr();
+        const double* const __restrict__ F_ptr      = (double*) F.data_ptr();
+        const double* const __restrict__ R_ptr      = (double*) R.data_ptr();
+
+        backward_Y_cuda_kernel<double><<<blocks, threads_per_block>>>(output_ptr, W_ptr, C_ptr, G_ptr, F_ptr, R_ptr,
+                                                                      L_out_list_ptr, L_in_list_ptr, u_sizes_ptr, v_sizes_ptr,
+                                                                      C_offsets_ptr, G_base_offsets_ptr, F_base_offsets_ptr, R_base_offsets_ptr,
+                                                                      ab_size, l_in_max_net_bound, l_out_list_size, l_in_list_size);
+    }
+    else if (output.dtype() == torch::kFloat32){
+              float* const __restrict__ output_ptr = (float*) output.data_ptr();
+        const float* const __restrict__ W_ptr      = (float*) W.data_ptr();
+        const float* const __restrict__ C_ptr      = (float*) C.data_ptr();
+        const float* const __restrict__ G_ptr      = (float*) G.data_ptr();
+        const float* const __restrict__ F_ptr      = (float*) F.data_ptr();
+        const float* const __restrict__ R_ptr      = (float*) R.data_ptr();
+
+        backward_Y_cuda_kernel<float><<<blocks, threads_per_block>>>(output_ptr, W_ptr, C_ptr, G_ptr, F_ptr, R_ptr,
+                                                                     L_out_list_ptr, L_in_list_ptr, u_sizes_ptr, v_sizes_ptr,
+                                                                     C_offsets_ptr, G_base_offsets_ptr, F_base_offsets_ptr, R_base_offsets_ptr,
+                                                                     ab_size, l_in_max_net_bound, l_out_list_size, l_in_list_size);
+    }
+}
+
