@@ -14,6 +14,7 @@ from typing import List
 
 from e3nn import rs
 from e3nn import tensor_message
+from e3nn import channel_mix
 from e3nn.rs import TY_RS_LOOSE
 from e3nn.o3 import get_flat_coupling_coefficients
 from e3nn.rsh import spherical_harmonics_xyz
@@ -248,6 +249,7 @@ class TensorMessageFunction(torch.autograd.Function):
         F = features.transpose(0, 1).contiguous()
         Y = real_spherical_harmonics.transpose(0, 1).contiguous()
         R = radial_model_outputs.transpose(0, 1).contiguous()
+        # print(layer.R_base_offsets)
 
         buffers = dict(layer.named_buffers_pointer())
 
@@ -299,6 +301,24 @@ class TensorMessageFunction(torch.autograd.Function):
 
         msg_grad_F = msg_grad_F.transpose_(0, 1).contiguous()   # [(a, b), (l_in, v, j)]
 
+        msg_grad_Y = tensor_message.backward_Y(
+            layer.norm_coef,                                    # W
+            buffers['coupling_coefficients'],                   # C
+            G,                                                  # G
+            F,                                                  # F
+            Y,                                                  # Y
+            R,                                                  # R
+            layer.l_out_list,                                   # L_out_list
+            layer.l_in_list,                                    # L_in_list
+            layer.mul_out_list,                                 # u_sizes
+            layer.mul_in_list,                                  # v_sizes
+            buffers['coupling_coefficients_offsets'],           # C_offsets
+            layer.grad_base_offsets,                            # G_base_offsets
+            layer.features_base_offsets,                        # F_base_offsets
+            layer.R_base_offsets)                               # R_base_offsets
+
+        msg_grad_Y = msg_grad_Y.transpose_(0, 1).contiguous()   # [(a, b), (l, m)]
+
         msg_grad_R = tensor_message.backward_R(
             layer.norm_coef,                                    # W
             buffers['coupling_coefficients'],                   # C
@@ -316,7 +336,51 @@ class TensorMessageFunction(torch.autograd.Function):
 
         msg_grad_R = msg_grad_R.transpose_(0, 1).contiguous()   # [(a, b), (l_out, l_in, l, u, v)]
 
-        return msg_grad_F, None, msg_grad_R, None
+        return msg_grad_F, msg_grad_Y, msg_grad_R, None
+
+
+class ChannelMixFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, features, weights, L_list, v_sizes, w_sizes):
+        F = features.transpose(0, 1).contiguous()
+
+        output_features = channel_mix.forward(weights, F, L_list, v_sizes, w_sizes)
+        output_features = output_features.transpose_(0, 1).contiguous()
+
+        ctx.save_for_backward(F, weights, L_list, v_sizes, w_sizes)
+
+        return output_features
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        F, W, L_list, v_sizes, w_sizes = ctx.saved_tensors  # F - transposed
+        G = grad_output.transpose(0, 1).contiguous()
+
+        grad_W = channel_mix.backward_W(G, F, L_list, v_sizes, w_sizes)
+
+        grad_F = channel_mix.backward_F(W, G, L_list, v_sizes, w_sizes)
+        grad_F = grad_F.transpose_(0, 1).contiguous()
+
+        return grad_F, grad_W, None, None, None
+
+
+class Atomwise(torch.nn.Module):
+    def __init__(self, L_list, w_sizes, v_sizes):
+        super().__init__()
+        self.register_buffer('L_list', L_list)
+        self.register_buffer('w_sizes', w_sizes)
+        self.register_buffer('v_sizes', v_sizes)
+
+        n_weights = (w_sizes * v_sizes).sum().item()
+        self.register_parameter('weights', torch.nn.Parameter(torch.randn(n_weights)))
+
+    def forward(self, features):
+        return mix_channels(features, self.weights, self.L_list, self.w_sizes, self.v_sizes)
 
 
 tensor_msg = TensorMessageFunction.apply
+mix_channels = ChannelMixFunction.apply
+
+
+
+

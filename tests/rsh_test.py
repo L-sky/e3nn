@@ -121,7 +121,6 @@ def test_sh_equivariance():
     - compose
     - spherical_harmonics
     are compatible
-
     Y(Z(alpha) Y(beta) Z(gamma) x) = D(alpha, beta, gamma) Y(x)
     with x = Z(a) Y(b) eta
     """
