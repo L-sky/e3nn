@@ -6,7 +6,8 @@ void forward_cuda(
         torch::Tensor F,
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes);
+        torch::Tensor w_sizes,
+        torch::Tensor norm);
 
 void backward_F_cuda(
         torch::Tensor output,
@@ -14,7 +15,8 @@ void backward_F_cuda(
         torch::Tensor G,
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes);
+        torch::Tensor w_sizes,
+        torch::Tensor norm);
 
 void backward_W_cuda(
         torch::Tensor output,
@@ -22,7 +24,8 @@ void backward_W_cuda(
         torch::Tensor F,
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes);
+        torch::Tensor w_sizes,
+        torch::Tensor norm);
 
 // C++ interface
 
@@ -54,8 +57,10 @@ torch::Tensor forward(
         lwm_size += (2 * (uint32_t) L_list[idx].item<int32_t>() + 1) * (uint32_t) w_sizes[idx].item<int32_t>();
     }
 
+    torch::Tensor norm = torch::rsqrt(v_sizes.to(F.dtype()));
+
     torch::Tensor output = torch::zeros({lwm_size, a_size}, F.options());
-    forward_cuda(output, W, F, L_list, v_sizes, w_sizes);
+    forward_cuda(output, W, F, L_list, v_sizes, w_sizes, norm);
     return output;
 }
 
@@ -79,8 +84,10 @@ torch::Tensor backward_F(
         lvm_size += (2 * (uint32_t) L_list[idx].item<int32_t>() + 1) * (uint32_t) v_sizes[idx].item<int32_t>();
     }
 
+    torch::Tensor norm = torch::rsqrt(v_sizes.to(G.dtype()));
+
     torch::Tensor output = torch::zeros({lvm_size, a_size}, G.options());
-    backward_F_cuda(output, W, G, L_list, v_sizes, w_sizes);
+    backward_F_cuda(output, W, G, L_list, v_sizes, w_sizes, norm);
     return output;
 }
 
@@ -103,8 +110,10 @@ torch::Tensor backward_W(
         wv_size += (uint32_t) w_sizes[idx].item<int32_t>() * (uint32_t) v_sizes[idx].item<int32_t>();
     }
 
+    torch::Tensor norm = torch::rsqrt(v_sizes.to(F.dtype()));
+
     torch::Tensor output = torch::zeros({wv_size}, G.options());
-    backward_W_cuda(output, G, F, L_list, v_sizes, w_sizes);
+    backward_W_cuda(output, G, F, L_list, v_sizes, w_sizes, norm);
     return output;
 }
 

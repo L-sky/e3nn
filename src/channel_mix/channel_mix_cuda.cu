@@ -14,6 +14,7 @@ __global__ void forward_child_cuda_kernel(
               T*        const __restrict__,
         const T*        const __restrict__,
         const T*        const __restrict__,
+        const T,
         const uint32_t,
         const uint32_t,
         const uint32_t,
@@ -25,6 +26,7 @@ __global__ void backward_F_child_cuda_kernel(
               T*        const __restrict__,
         const T*        const __restrict__,
         const T*        const __restrict__,
+        const T,
         const uint32_t,
         const uint32_t,
         const uint32_t,
@@ -36,6 +38,7 @@ __global__ void backward_W_child_cuda_kernel(
               T*        const __restrict__,
         const T*        const __restrict__,
         const T*        const __restrict__,
+        const T,
         const uint32_t,
         const uint32_t,
         const uint32_t,
@@ -49,6 +52,7 @@ __global__ void forward_parent_cuda_kernel(
               T*        const __restrict__ output,
         const T*        const __restrict__ W,
         const T*        const __restrict__ F,
+        const T*        const __restrict__ norm_list,
         const uint32_t* const __restrict__ L_list,
         const uint32_t* const __restrict__ v_sizes,
         const uint32_t* const __restrict__ w_sizes,
@@ -78,7 +82,9 @@ __global__ void forward_parent_cuda_kernel(
     const T* const __restrict__ W_l      = W + W_offset;
     const T* const __restrict__ F_l      = F + F_offset;
 
-    forward_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, W_l, F_l,
+    const T norm_l = norm_list[L_id];
+
+    forward_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, W_l, F_l, norm_l,
                                                                 m_size, v_size, w_size, a_size);
 }
 
@@ -88,6 +94,7 @@ __global__ void forward_child_cuda_kernel(
               T*        const __restrict__ output_l,
         const T*        const __restrict__ W_l,
         const T*        const __restrict__ F_l,
+        const T                            norm_l,
         const uint32_t                     m_size,
         const uint32_t                     v_size,
         const uint32_t                     w_size,
@@ -111,7 +118,7 @@ __global__ void forward_child_cuda_kernel(
     }
 
     // write result to the global memory
-    output_l[w * m_size * a_size + m * a_size + a] = output_tmp;
+    output_l[w * m_size * a_size + m * a_size + a] = norm_l * output_tmp;
 }
 
 
@@ -120,6 +127,7 @@ __global__ void backward_F_parent_cuda_kernel(
               T*        const __restrict__ output,
         const T*        const __restrict__ W,
         const T*        const __restrict__ G,
+        const T*        const __restrict__ norm_list,
         const uint32_t* const __restrict__ L_list,
         const uint32_t* const __restrict__ v_sizes,
         const uint32_t* const __restrict__ w_sizes,
@@ -149,7 +157,9 @@ __global__ void backward_F_parent_cuda_kernel(
     const T* const __restrict__ W_l      = W + W_offset;
     const T* const __restrict__ G_l      = G + G_offset;
 
-    backward_F_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, W_l, G_l,
+    const T norm_l = norm_list[L_id];
+
+    backward_F_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, W_l, G_l, norm_l,
                                                                    m_size, v_size, w_size, a_size);
 }
 
@@ -159,6 +169,7 @@ __global__ void backward_F_child_cuda_kernel(
               T*        const __restrict__ output_l,
         const T*        const __restrict__ W_l,
         const T*        const __restrict__ G_l,
+        const T                            norm_l,
         const uint32_t                     m_size,
         const uint32_t                     v_size,
         const uint32_t                     w_size,
@@ -179,7 +190,7 @@ __global__ void backward_F_child_cuda_kernel(
     }
 
     // write result to the global memory
-    output_l[v * m_size * a_size + m * a_size + a] = output_tmp;
+    output_l[v * m_size * a_size + m * a_size + a] = norm_l * output_tmp;
 }
 
 
@@ -188,6 +199,7 @@ __global__ void backward_W_parent_cuda_kernel(
               T*        const __restrict__ output,
         const T*        const __restrict__ G,
         const T*        const __restrict__ F,
+        const T*        const __restrict__ norm_list,
         const uint32_t* const __restrict__ L_list,
         const uint32_t* const __restrict__ v_sizes,
         const uint32_t* const __restrict__ w_sizes,
@@ -220,7 +232,9 @@ __global__ void backward_W_parent_cuda_kernel(
     const T* const __restrict__ G_l      = G + G_offset;
     const T* const __restrict__ F_l      = F + F_offset;
 
-    backward_W_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, G_l, F_l,
+    const T norm_l = norm_list[L_id];
+
+    backward_W_child_cuda_kernel<T><<<blocks, threads_per_block>>>(output_l, G_l, F_l, norm_l,
                                                                    m_size, v_size, w_size, a_size);
 
 }
@@ -231,6 +245,7 @@ __global__ void backward_W_child_cuda_kernel(
               T*        const __restrict__ output_l,
         const T*        const __restrict__ G_l,
         const T*        const __restrict__ F_l,
+        const T                            norm_l,
         const uint32_t                     m_size,
         const uint32_t                     v_size,
         const uint32_t                     w_size,
@@ -251,7 +266,7 @@ __global__ void backward_W_child_cuda_kernel(
     }
 
     // write result to the global memory
-    output_l[w * v_size + v] = output_tmp;
+    output_l[w * v_size + v] = norm_l * output_tmp;
 }
 
 
@@ -261,7 +276,8 @@ void forward_cuda(
         torch::Tensor F,            // [k(L) (vm), a]
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes
+        torch::Tensor w_sizes,
+        torch::Tensor norm
 ) {
     const uint32_t a_size = F.size(1);
     const uint32_t blocks = L_list.size(0);
@@ -274,15 +290,17 @@ void forward_cuda(
               double* const __restrict__ output_ptr = (double*) output.data_ptr();
         const double* const __restrict__ W_ptr      = (double*) W.data_ptr();
         const double* const __restrict__ F_ptr      = (double*) F.data_ptr();
+        const double* const __restrict__ norm_ptr   = (double*) norm.data_ptr();
 
-        forward_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, W_ptr, F_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        forward_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, W_ptr, F_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
     else if (output.dtype() == torch::kFloat32) {
               float* const __restrict__ output_ptr = (float*) output.data_ptr();
         const float* const __restrict__ W_ptr      = (float*) W.data_ptr();
         const float* const __restrict__ F_ptr      = (float*) F.data_ptr();
+        const float* const __restrict__ norm_ptr   = (float*) norm.data_ptr();
 
-        forward_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, W_ptr, F_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        forward_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, W_ptr, F_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
 }
 
@@ -293,7 +311,8 @@ void backward_F_cuda(
         torch::Tensor G,            // [k(L) (wm), a]
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes
+        torch::Tensor w_sizes,
+        torch::Tensor norm
 ) {
     const uint32_t a_size = G.size(1);
     const uint32_t blocks = L_list.size(0);
@@ -306,15 +325,17 @@ void backward_F_cuda(
               double* const __restrict__ output_ptr = (double*) output.data_ptr();
         const double* const __restrict__ W_ptr      = (double*) W.data_ptr();
         const double* const __restrict__ G_ptr      = (double*) G.data_ptr();
+        const double* const __restrict__ norm_ptr   = (double*) norm.data_ptr();
 
-        backward_F_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, W_ptr, G_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        backward_F_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, W_ptr, G_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
     else if (output.dtype() == torch::kFloat32) {
               float* const __restrict__ output_ptr = (float*) output.data_ptr();
         const float* const __restrict__ W_ptr      = (float*) W.data_ptr();
         const float* const __restrict__ G_ptr      = (float*) G.data_ptr();
+        const float* const __restrict__ norm_ptr   = (float*) norm.data_ptr();
 
-        backward_F_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, W_ptr, G_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        backward_F_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, W_ptr, G_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
 }
 
@@ -325,7 +346,8 @@ void backward_W_cuda(
         torch::Tensor F,            // [k(L) (vm), a]
         torch::Tensor L_list,
         torch::Tensor v_sizes,
-        torch::Tensor w_sizes
+        torch::Tensor w_sizes,
+        torch::Tensor norm
 ) {
     const uint32_t a_size = F.size(1);
     const uint32_t blocks = L_list.size(0);
@@ -338,14 +360,16 @@ void backward_W_cuda(
               double* const __restrict__ output_ptr = (double*) output.data_ptr();
         const double* const __restrict__ G_ptr      = (double*) G.data_ptr();
         const double* const __restrict__ F_ptr      = (double*) F.data_ptr();
+        const double* const __restrict__ norm_ptr   = (double*) norm.data_ptr();
 
-        backward_W_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, G_ptr, F_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        backward_W_parent_cuda_kernel<double><<<blocks, 1>>>(output_ptr, G_ptr, F_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
     else if (output.dtype() == torch::kFloat32) {
               float* const __restrict__ output_ptr = (float*) output.data_ptr();
         const float* const __restrict__ G_ptr      = (float*) G.data_ptr();
         const float* const __restrict__ F_ptr      = (float*) F.data_ptr();
+        const float* const __restrict__ norm_ptr   = (float*) norm.data_ptr();
 
-        backward_W_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, G_ptr, F_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
+        backward_W_parent_cuda_kernel<float><<<blocks, 1>>>(output_ptr, G_ptr, F_ptr, norm_ptr, L_list_ptr, v_sizes_ptr, w_sizes_ptr, a_size);
     }
 }
