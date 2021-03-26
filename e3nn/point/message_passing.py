@@ -194,10 +194,11 @@ class TensorPassingLayer(torch_geometric.nn.MessagePassing):
 
         self.max_l = rs.lmax(self.Rs_in) + rs.lmax(self.Rs_pre_gate)
 
-        self.register_buffer('l_out_list',      torch.tensor(rs.extract_l(self.Rs_pre_gate),    dtype=torch.int32))
-        self.register_buffer('l_in_list',       torch.tensor(rs.extract_l(self.Rs_in),          dtype=torch.int32))
-        self.register_buffer('mul_out_list',    torch.tensor(rs.extract_mul(self.Rs_pre_gate),  dtype=torch.int32))
-        self.register_buffer('mul_in_list',     torch.tensor(rs.extract_mul(self.Rs_in),        dtype=torch.int32))
+        self.register_buffer('l_out_list',              torch.tensor(rs.extract_l(self.Rs_pre_gate),    dtype=torch.int32))
+        self.register_buffer('l_in_list',               torch.tensor(rs.extract_l(self.Rs_in),          dtype=torch.int32))
+        self.register_buffer('mul_out_list',            torch.tensor(rs.extract_mul(self.Rs_pre_gate),  dtype=torch.int32))
+        self.register_buffer('mul_out_post_gate_list',  torch.tensor(rs.extract_mul(self.Rs_out),       dtype=torch.int32))
+        self.register_buffer('mul_in_list',             torch.tensor(rs.extract_mul(self.Rs_in),        dtype=torch.int32))
 
         R_base_offsets, grad_base_offsets, features_base_offsets = self._calculate_offsets()
         self.register_buffer('R_base_offsets',          torch.tensor(R_base_offsets,        dtype=torch.int32))
